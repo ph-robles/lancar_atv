@@ -27,7 +27,7 @@ def garantir_planilha(arquivo: str, aba: str):
     """
     if not os.path.exists(arquivo):
         df = pd.DataFrame(columns=["Nome", "ID"])
-        with pd.ExcelWriter(arquivo, engine="openpyxl") as writer:
+        with pd.ExcelWriter(arquivo, engine="openpyxl", mode="w") as writer:
             df.to_excel(writer, sheet_name=aba, index=False)
 
 def carregar_planilha(arquivo: str, aba: str) -> pd.DataFrame:
@@ -39,16 +39,16 @@ def carregar_planilha(arquivo: str, aba: str) -> pd.DataFrame:
     try:
         df = pd.read_excel(arquivo, sheet_name=aba, engine="openpyxl")
     except Exception:
-        # Se a aba não existir ou der erro, recria o formato mínimo
+        # Se a aba não existir ou der erro, recria o formato mínimo (modo write, mais seguro)
         df = pd.DataFrame(columns=["Nome", "ID"])
-        with pd.ExcelWriter(arquivo, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+        with pd.ExcelWriter(arquivo, engine="openpyxl", mode="w") as writer:
             df.to_excel(writer, sheet_name=aba, index=False)
     # Normaliza colunas
     df = df.reindex(columns=["Nome", "ID"])
     return df
 
 def salvar_planilha(arquivo: str, aba: str, df: pd.DataFrame):
-    with pd.ExcelWriter(arquivo, engine="openpyxl") as writer:
+    with pd.ExcelWriter(arquivo, engine="openpyxl", mode="w") as writer:
         df.to_excel(writer, sheet_name=aba, index=False)
 
 def gerar_buffer_excel(df: pd.DataFrame, aba: str) -> bytes:
@@ -60,6 +60,14 @@ def gerar_buffer_excel(df: pd.DataFrame, aba: str) -> bytes:
         df.to_excel(writer, sheet_name=aba, index=False)
     buffer.seek(0)
     return buffer.read()
+
+def limpar_planilha(arquivo: str, aba: str):
+    """
+    (Novo) Recria a planilha/aba com cabeçalho ['Nome','ID'] e sem dados.
+    """
+    df_vazio = pd.DataFrame(columns=["Nome", "ID"])
+    with pd.ExcelWriter(arquivo, engine="openpyxl", mode="w") as writer:
+        df_vazio.to_excel(writer, sheet_name=aba, index=False)
 
 # ---------------------------
 # Barra lateral (opções)
@@ -76,19 +84,62 @@ st.sidebar.divider()
 st.sidebar.caption("💡 Dica: deixe o arquivo padrão e a aba padrão para simplicidade.")
 
 # ---------------------------
+# Botão: Novo arquivo (limpar planilha)
+# ---------------------------
+st.sidebar.subheader("🗑️ Novo arquivo (limpar planilha)")
+col_sb1, col_sb2 = st.sidebar.columns([1, 1])
+with col_sb1:
+    confirmar_limpeza = st.checkbox("Confirmar limpeza")
+with col_sb2:
+    acao_limpar_planilha = st.button("Limpar agora")
+
+if acao_limpar_planilha:
+    if not confirmar_limpeza:
+        st.sidebar.error("Marque **Confirmar limpeza** antes de prosseguir.")
+    else:
+        try:
+            limpar_planilha(arquivo_excel, aba_excel)
+            st.sidebar.success(f"Planilha **{arquivo_excel}** (aba **{aba_excel}**) reiniciada com sucesso.")
+            # Opcional: limpar os campos do formulário também
+            st.session_state["form_nome"] = ""
+            st.session_state["form_id"] = ""
+            st.session_state["form_qtd"] = 1
+            st.rerun()
+        except PermissionError:
+            st.sidebar.error("❌ Não foi possível limpar. Feche o arquivo no Excel e tente novamente.")
+        except Exception as exc:
+            st.sidebar.error(f"❌ Erro ao limpar: {exc}")
+
+st.sidebar.divider()
+st.sidebar.caption("A limpeza recria a aba com apenas o cabeçalho: Nome, ID.")
+
+# ---------------------------
 # Formulário de entrada
 # ---------------------------
 with st.form("form_cadastro", clear_on_submit=False):
     col1, col2 = st.columns([2, 1])
     with col1:
-        nome = st.text_input("Nome do funcionário", max_chars=120, placeholder="Ex.: Maria Silva")
+        nome = st.text_input(
+            "Nome do funcionário",
+            max_chars=120,
+            placeholder="Ex.: Maria Silva",
+            key="form_nome"  # <-- adiciona key para permitir limpar via session_state
+        )
     with col2:
-        qtd = st.number_input("Quantidade de repetições", min_value=1, value=1, step=1, help="Quantas linhas serão criadas.")
+        qtd = st.number_input(
+            "Quantidade de repetições",
+            min_value=1,
+            value=1,
+            step=1,
+            help="Quantas linhas serão criadas.",
+            key="form_qtd"  # <-- adiciona key
+        )
 
     id_func = st.text_input(
         f"ID (até {MAX_ID_CHARS} caracteres)",
         max_chars=MAX_ID_CHARS,
-        placeholder="Ex.: 123456789ABCDEF"
+        placeholder="Ex.: 123456789ABCDEF",
+        key="form_id"  # <-- adiciona key
     )
 
     # Preview do que será inserido
@@ -106,9 +157,12 @@ with st.form("form_cadastro", clear_on_submit=False):
     with colb2:
         limpar = st.form_submit_button("🧹 Limpar formulário")
 
-# Limpar formulário (reseta estado visual; os inputs permanecem conforme Streamlit)
+# Limpar formulário (zera campos e reroda)
 if limpar:
-    st.experimental_rerun()
+    st.session_state["form_nome"] = ""
+    st.session_state["form_id"] = ""
+    st.session_state["form_qtd"] = 1
+    st.rerun()  # <-- substitui st.experimental_rerun()
 
 # ---------------------------
 # Ação: gravar
